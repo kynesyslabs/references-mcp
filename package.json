@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && chmod +x dist/index.js && chmod +x dist/index-http.js",
     "start": "node dist/index.js",
-    "start:http": "node dist/index-http.js",
+    "start:http": "MCP_PORT=${MCP_PORT:-3000} node dist/index-http.js",
     "dev": "tsx src/index.ts",
     "test": "jest",
     "lint": "eslint src/**/*.ts",
@@ -24,7 +24,8 @@
     "cheerio": "^1.0.0-rc.12",
     "sqlite3": "^5.1.6",
     "chokidar": "^3.5.3",
-    "crypto": "^1.0.1"
+    "crypto": "^1.0.1",
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

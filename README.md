@@ -270,12 +270,11 @@ Perfect for use with:
 npm run start:http
 
 # Custom port via environment variable
-PORT=8080 npm run start:http
 MCP_PORT=8080 npm run start:http
 
 # Using .env file
 cp .env.example .env
-# Edit .env file with your settings
+# Edit .env file: MCP_PORT=8080
 npm run start:http
 ```
 
@@ -290,7 +289,7 @@ npm run start:http
 # Team members connect to: http://your-server:3000/message
 
 # Custom port
-PORT=8080 npm run start:http
+MCP_PORT=8080 npm run start:http
 # Connect to: http://your-server:8080/message
 
 # Health monitoring in production
@@ -351,10 +350,9 @@ MCP_PORT=8080 docker-compose up -d
 ### Environment Variables
 
 ```bash
-PORT=3000          # Server port (default: 3000)
-MCP_PORT=3000      # Alternative port variable
+MCP_PORT=3000       # Server port (default: 3000)
 NODE_ENV=production # Environment mode
-HOST=0.0.0.0       # Host binding (default: all interfaces)
+HOST=0.0.0.0        # Host binding (default: all interfaces)
 ```
 
 ### SSL/HTTPS Setup

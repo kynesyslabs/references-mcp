@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
@@ -646,7 +647,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
 
 async function main() {
   const server = new DemoSDKHTTPMCPServer();
-  const port = parseInt(process.env.PORT || process.env.MCP_PORT || '3000');
+  const port = parseInt(process.env.MCP_PORT || process.env.PORT || '3000');
   
   process.on('SIGINT', () => {
     console.log('Shutting down HTTP server...');
