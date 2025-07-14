@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { randomUUID } from 'crypto';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -60,7 +63,7 @@ export class DemoSDKHTTPMCPServer {
 
       this.searcher = new DocumentSearcher(result.pages);
       this.isInitialized = true;
-      console.log('HTTP MCP server initialized successfully');
+      console.log('StreamableHTTP MCP server initialized successfully');
     } catch (error) {
       console.error('Failed to initialize parser:', error);
       throw error;
@@ -234,11 +237,11 @@ export class DemoSDKHTTPMCPServer {
       content: [
         {
           type: 'text',
-          text: `# @kynesyslabs/demosdk API Reference (HTTP)
+          text: `# @kynesyslabs/demosdk API Reference (StreamableHTTP)
 
 ## Overview
 This documentation contains ${pages.totalPages} pages across ${pages.moduleCount} modules.
-Server running with HTTP/SSE transport.
+Server running with StreamableHTTP transport.
 
 ## Available Modules
 ${modules.map(module => `- ${module}`).join('\n')}
@@ -513,137 +516,221 @@ The documentation is automatically updated from the TypeDoc generated files.`
     };
   }
 
-  async run(port: number = 3000): Promise<void> {
-    const http = await import('http');
-    
-    // Session management for StreamableHTTP
-    const activeSessions = new Map<string, boolean>();
-    
-    // Create StreamableHTTP transport with session management
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId: string) => {
-        activeSessions.set(sessionId, true);
-        console.log(`✅ Session initialized: ${sessionId}`);
-      },
-      onsessionclosed: (sessionId: string) => {
-        activeSessions.delete(sessionId);
-        console.log(`🧹 Session closed: ${sessionId}`);
-      },
-      allowedOrigins: ['*'],
-      enableDnsRebindingProtection: false,
-    });
-    
-    // Connect the server to the transport
-    await this.server.connect(transport);
-    
-    const httpServer = http.createServer(async (req, res) => {
-      try {
-        // Enable CORS
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Id');
-        
-        if (req.method === 'OPTIONS') {
-          res.writeHead(200);
-          res.end();
-          return;
-        }
-        
-        const parsedUrl = new URL(req.url || '', `http://${req.headers.host || `localhost:${port}`}`);
-        
-        // Handle health check endpoint
-        if (req.method === 'GET' && parsedUrl.pathname === '/health') {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'healthy',
-            initialized: this.isInitialized,
-            pages: this.searcher?.getStats().totalPages || 0,
-            activeSessions: activeSessions.size,
-            transport: 'StreamableHTTP'
-          }));
-          return;
-        }
-        
-        // Handle server info endpoint
-        if (req.method === 'GET' && parsedUrl.pathname === '/') {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            name: 'DemoSDK API Reference MCP Server',
-            version: '1.0.0',
-            transport: 'StreamableHTTP',
-            endpoints: {
-              'GET /message': 'Start MCP session',
-              'POST /message': 'Send MCP message',
-              'DELETE /message': 'Close MCP session',
-              'GET /health': 'Health check',
-              'GET /': 'Server info'
-            },
-            activeSessions: activeSessions.size,
-            usage: 'Connect MCP-compatible clients to /message endpoint'
-          }));
-          return;
-        }
-        
-        // All MCP communication goes through /message with StreamableHTTP
-        if (parsedUrl.pathname === '/message') {
-          await transport.handleRequest(req, res);
-          return;
-        }
-        
-        // 404 for other paths
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-        
-      } catch (error) {
-        console.error('❌ Server error:', error);
-        if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ 
-            error: 'Internal server error',
-            message: error instanceof Error ? error.message : 'Unknown error'
-          }));
-        }
-      }
-    });
-    
-    // Handle server shutdown gracefully
-    process.on('SIGINT', () => {
-      console.log('📴 Shutting down StreamableHTTP server...');
-      transport.close();
-      httpServer.close();
-    });
-    
-    httpServer.listen(port, () => {
-      console.log(`🚀 DemoSDK MCP Server running on http://localhost:${port}`);
-      console.log(`📡 StreamableHTTP endpoint: http://localhost:${port}/message`);
-      console.log(`🏥 Health check: http://localhost:${port}/health`);
-      console.log(`📋 Server info: http://localhost:${port}/`);
-      console.log(`🔌 Ready for MCP client connections`);
-    });
+  getServer(): Server {
+    return this.server;
   }
 }
 
 async function main() {
-  const server = new DemoSDKHTTPMCPServer();
   const port = parseInt(process.env.MCP_PORT || process.env.PORT || '3000');
+  const mcpServer = new DemoSDKHTTPMCPServer();
   
-  process.on('SIGINT', () => {
-    console.log('Shutting down StreamableHTTP server...');
+  // Wait for server initialization
+  await new Promise(resolve => {
+    const checkInit = () => {
+      if ((mcpServer as any).isInitialized) {
+        resolve(true);
+      } else {
+        setTimeout(checkInit, 100);
+      }
+    };
+    checkInit();
+  });
+
+  const app = express();
+  app.use(express.json());
+  
+  // CORS configuration
+  app.use(cors({
+    origin: '*',
+    exposedHeaders: ["Mcp-Session-Id"]
+  }));
+
+  // Map to store transports by session ID
+  const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+
+  // Health check endpoint
+  app.get('/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      initialized: (mcpServer as any).isInitialized,
+      pages: (mcpServer as any).searcher?.getStats().totalPages || 0,
+      activeSessions: Object.keys(transports).length,
+      transport: 'StreamableHTTP'
+    });
+  });
+
+  // Server info endpoint
+  app.get('/', (req, res) => {
+    res.json({
+      name: 'DemoSDK API Reference MCP Server',
+      version: '1.0.0',
+      transport: 'StreamableHTTP',
+      endpoints: {
+        'GET /mcp': 'Start MCP session',
+        'POST /mcp': 'Send MCP message',
+        'DELETE /mcp': 'Close MCP session',
+        'GET /health': 'Health check',
+        'GET /': 'Server info'
+      },
+      activeSessions: Object.keys(transports).length,
+      usage: 'Connect MCP-compatible clients to /mcp endpoint'
+    });
+  });
+
+  // MCP POST endpoint
+  const mcpPostHandler = async (req: express.Request, res: express.Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    
+    if (sessionId) {
+      console.log(`Received MCP request for session: ${sessionId}`);
+    } else {
+      console.log('New MCP request (no session ID)');
+    }
+
+    try {
+      let transport: StreamableHTTPServerTransport;
+      
+      if (sessionId && transports[sessionId]) {
+        // Reuse existing transport
+        transport = transports[sessionId];
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        // New initialization request
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sessionId: string) => {
+            console.log(`Session initialized with ID: ${sessionId}`);
+            transports[sessionId] = transport;
+          },
+          onsessionclosed: (sessionId: string) => {
+            console.log(`Session closed: ${sessionId}`);
+            delete transports[sessionId];
+          }
+        });
+
+        // Set up onclose handler
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid && transports[sid]) {
+            console.log(`Transport closed for session ${sid}`);
+            delete transports[sid];
+          }
+        };
+
+        // Connect the transport to the MCP server
+        await mcpServer.getServer().connect(transport);
+        await transport.handleRequest(req, res, req.body);
+        return;
+      } else {
+        // Invalid request
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: No valid session ID provided',
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // Handle request with existing transport
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        });
+      }
+    }
+  };
+
+  // MCP GET endpoint for SSE
+  const mcpGetHandler = async (req: express.Request, res: express.Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    
+    if (!sessionId || !transports[sessionId]) {
+      res.status(400).send('Invalid or missing session ID');
+      return;
+    }
+
+    console.log(`Establishing SSE stream for session ${sessionId}`);
+    const transport = transports[sessionId];
+    await transport.handleRequest(req, res);
+  };
+
+  // MCP DELETE endpoint for session termination
+  const mcpDeleteHandler = async (req: express.Request, res: express.Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    
+    if (!sessionId || !transports[sessionId]) {
+      res.status(400).send('Invalid or missing session ID');
+      return;
+    }
+
+    console.log(`Session termination request for session ${sessionId}`);
+    try {
+      const transport = transports[sessionId];
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      console.error('Error handling session termination:', error);
+      if (!res.headersSent) {
+        res.status(500).send('Error processing session termination');
+      }
+    }
+  };
+
+  // Set up MCP routes
+  app.post('/mcp', mcpPostHandler);
+  app.get('/mcp', mcpGetHandler);
+  app.delete('/mcp', mcpDeleteHandler);
+
+  // Start the server
+  app.listen(port, () => {
+    console.log(`🚀 DemoSDK MCP Server running on http://localhost:${port}`);
+    console.log(`📡 StreamableHTTP endpoint: http://localhost:${port}/mcp`);
+    console.log(`🏥 Health check: http://localhost:${port}/health`);
+    console.log(`📋 Server info: http://localhost:${port}/`);
+    console.log(`🔌 Ready for MCP client connections`);
+  });
+
+  // Handle server shutdown
+  process.on('SIGINT', async () => {
+    console.log('📴 Shutting down StreamableHTTP server...');
+    for (const sessionId in transports) {
+      try {
+        console.log(`Closing transport for session ${sessionId}`);
+        await transports[sessionId].close();
+        delete transports[sessionId];
+      } catch (error) {
+        console.error(`Error closing transport for session ${sessionId}:`, error);
+      }
+    }
+    console.log('Server shutdown complete');
     process.exit(0);
   });
 
-  process.on('SIGTERM', () => {
-    console.log('Shutting down StreamableHTTP server...');
+  process.on('SIGTERM', async () => {
+    console.log('📴 Shutting down StreamableHTTP server...');
+    for (const sessionId in transports) {
+      try {
+        await transports[sessionId].close();
+        delete transports[sessionId];
+      } catch (error) {
+        console.error(`Error closing transport for session ${sessionId}:`, error);
+      }
+    }
     process.exit(0);
   });
-
-  try {
-    await server.run(port);
-  } catch (error) {
-    console.error('Failed to start StreamableHTTP server:', error);
-    process.exit(1);
-  }
 }
 
-main();
+main().catch(error => {
+  console.error('Failed to start StreamableHTTP server:', error);
+  process.exit(1);
+});
