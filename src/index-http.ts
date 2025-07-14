@@ -547,28 +547,14 @@ The documentation is automatically updated from the TypeDoc generated files.`
           return;
         }
         
-        // Handle server info endpoint
-        if (req.method === 'GET' && parsedUrl.pathname === '/') {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            name: 'DemoSDK API Reference MCP Server',
-            version: '1.0.0',
-            transport: 'StreamableHTTP',
-            endpoints: {
-              'GET /message': 'Start MCP session',
-              'POST /message': 'Send MCP message',
-              'DELETE /message': 'Close MCP session',
-              'GET /health': 'Health check',
-              'GET /': 'Server info'
-            },
-            activeSessions: activeTransports.size,
-            usage: 'Connect MCP-compatible clients to /message endpoint'
-          }));
-          return;
-        }
+        // Check if this is an MCP request vs server info request
+        const isMcpRequest = req.headers.accept?.includes('text/event-stream') || 
+                           req.headers.accept?.includes('application/json') ||
+                           req.headers['mcp-session-id'] ||
+                           req.headers['content-type']?.includes('application/json');
         
-        // All MCP communication goes through /message with StreamableHTTP
-        if (parsedUrl.pathname === '/message') {
+        // Handle MCP communication on root path
+        if (parsedUrl.pathname === '/' && isMcpRequest) {
           // Check if this is an initialization request or has session ID
           const sessionId = req.headers['mcp-session-id'] as string;
           
@@ -671,6 +657,25 @@ The documentation is automatically updated from the TypeDoc generated files.`
           }
         }
         
+        // Handle server info endpoint (GET without MCP headers)
+        if (req.method === 'GET' && parsedUrl.pathname === '/' && !isMcpRequest) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            name: 'DemoSDK API Reference MCP Server',
+            version: '1.0.0',
+            transport: 'StreamableHTTP',
+            endpoints: {
+              'GET /': 'Start MCP session or get server info',
+              'POST /': 'Send MCP message',
+              'DELETE /': 'Close MCP session',
+              'GET /health': 'Health check'
+            },
+            activeSessions: activeTransports.size,
+            usage: 'Connect MCP-compatible clients to root endpoint'
+          }));
+          return;
+        }
+        
         // 404 for other paths
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
@@ -700,9 +705,9 @@ The documentation is automatically updated from the TypeDoc generated files.`
     
     httpServer.listen(port, () => {
       console.log(`🚀 DemoSDK MCP Server running on http://localhost:${port}`);
-      console.log(`📡 StreamableHTTP endpoint: http://localhost:${port}/message`);
+      console.log(`📡 StreamableHTTP endpoint: http://localhost:${port}/`);
       console.log(`🏥 Health check: http://localhost:${port}/health`);
-      console.log(`📋 Server info: http://localhost:${port}/`);
+      console.log(`📋 Server info: http://localhost:${port}/ (browser)`);
       console.log(`🔌 Ready for MCP client connections`);
     });
   }
