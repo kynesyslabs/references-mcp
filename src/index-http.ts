@@ -516,26 +516,8 @@ The documentation is automatically updated from the TypeDoc generated files.`
   async run(port: number = 3000): Promise<void> {
     const http = await import('http');
     
-    // Session management for StreamableHTTP
-    const activeSessions = new Map<string, boolean>();
-    
-    // Create StreamableHTTP transport with session management
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId: string) => {
-        activeSessions.set(sessionId, true);
-        console.log(`✅ Session initialized: ${sessionId}`);
-      },
-      onsessionclosed: (sessionId: string) => {
-        activeSessions.delete(sessionId);
-        console.log(`🧹 Session closed: ${sessionId}`);
-      },
-      allowedOrigins: ['*'],
-      enableDnsRebindingProtection: false,
-    });
-    
-    // Connect the server to the transport
-    await this.server.connect(transport);
+    // Session management - store transports by session ID
+    const activeTransports = new Map<string, StreamableHTTPServerTransport>();
     
     const httpServer = http.createServer(async (req, res) => {
       try {
@@ -559,7 +541,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
             status: 'healthy',
             initialized: this.isInitialized,
             pages: this.searcher?.getStats().totalPages || 0,
-            activeSessions: activeSessions.size,
+            activeSessions: activeTransports.size,
             transport: 'StreamableHTTP'
           }));
           return;
@@ -579,7 +561,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
               'GET /health': 'Health check',
               'GET /': 'Server info'
             },
-            activeSessions: activeSessions.size,
+            activeSessions: activeTransports.size,
             usage: 'Connect MCP-compatible clients to /message endpoint'
           }));
           return;
@@ -587,8 +569,106 @@ The documentation is automatically updated from the TypeDoc generated files.`
         
         // All MCP communication goes through /message with StreamableHTTP
         if (parsedUrl.pathname === '/message') {
-          await transport.handleRequest(req, res);
-          return;
+          // Check if this is an initialization request or has session ID
+          const sessionId = req.headers['mcp-session-id'] as string;
+          
+          let transport: StreamableHTTPServerTransport;
+          
+          if (req.method === 'POST') {
+            // For POST requests, check if this is initialization or existing session
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', async () => {
+              try {
+                const parsedBody = JSON.parse(body);
+                const isInit = parsedBody.method === 'initialize';
+                
+                if (isInit && !sessionId) {
+                  // New initialization request - create new transport
+                  transport = new StreamableHTTPServerTransport({
+                    sessionIdGenerator: () => randomUUID(),
+                    onsessioninitialized: (newSessionId: string) => {
+                      activeTransports.set(newSessionId, transport);
+                      console.log(`✅ Session initialized: ${newSessionId}`);
+                    },
+                    onsessionclosed: (closedSessionId: string) => {
+                      activeTransports.delete(closedSessionId);
+                      console.log(`🧹 Session closed: ${closedSessionId}`);
+                    },
+                    allowedOrigins: ['*'],
+                    enableDnsRebindingProtection: false,
+                  });
+                  
+                  // Connect new transport to server
+                  await this.server.connect(transport);
+                  
+                  // Handle the initialization request
+                  await transport.handleRequest(req, res, parsedBody);
+                } else if (sessionId && activeTransports.has(sessionId)) {
+                  // Existing session request
+                  transport = activeTransports.get(sessionId)!;
+                  await transport.handleRequest(req, res, parsedBody);
+                } else {
+                  // Invalid request
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                      code: -32000,
+                      message: 'Bad Request: Invalid session or missing initialization'
+                    },
+                    id: null
+                  }));
+                }
+              } catch (error) {
+                console.error('Error parsing request:', error);
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  jsonrpc: '2.0',
+                  error: {
+                    code: -32700,
+                    message: 'Parse error'
+                  },
+                  id: null
+                }));
+              }
+            });
+            return;
+          } else if (req.method === 'GET') {
+            // GET request for SSE stream - must have session ID
+            if (sessionId && activeTransports.has(sessionId)) {
+              transport = activeTransports.get(sessionId)!;
+              await transport.handleRequest(req, res);
+            } else {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32000,
+                  message: 'Bad Request: Invalid session ID for SSE stream'
+                },
+                id: null
+              }));
+            }
+            return;
+          } else if (req.method === 'DELETE') {
+            // DELETE request for session termination
+            if (sessionId && activeTransports.has(sessionId)) {
+              transport = activeTransports.get(sessionId)!;
+              await transport.handleRequest(req, res);
+            } else {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32000,
+                  message: 'Bad Request: Invalid session ID for termination'
+                },
+                id: null
+              }));
+            }
+            return;
+          }
         }
         
         // 404 for other paths
@@ -610,7 +690,11 @@ The documentation is automatically updated from the TypeDoc generated files.`
     // Handle server shutdown gracefully
     process.on('SIGINT', () => {
       console.log('📴 Shutting down StreamableHTTP server...');
-      transport.close();
+      for (const [sessionId, transport] of activeTransports.entries()) {
+        console.log(`Closing transport for session ${sessionId}`);
+        transport.close();
+      }
+      activeTransports.clear();
       httpServer.close();
     });
     
