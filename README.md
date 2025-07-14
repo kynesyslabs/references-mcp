@@ -4,6 +4,27 @@ A Model Context Protocol (MCP) server for efficient search and retrieval of Type
 
 **Supports both local (stdio) and remote (SSE/HTTP) MCP connections.**
 
+## Hosted Instance
+
+https://get.demos.sh
+
+### Connect to claude code
+
+`claude mcp add -s user --transport http demosdk_references https://get.demos.sh`
+
+### Connect to any other mcp server enabled app (like claude desktop)
+
+```
+{
+  mcpServers: {
+    "demosdk_references": {
+      "type": "http",
+      "url": "https://get.demos.sh"
+    }
+  }
+}
+```
+
 ## Quick Start
 
 ```bash
