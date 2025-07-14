@@ -263,6 +263,22 @@ Perfect for use with:
 - **Microservices**: HTTP API integration
 - **Development teams**: Shared documentation server
 
+### Port Configuration
+
+```bash
+# Default port (3000)
+npm run start:http
+
+# Custom port via environment variable
+PORT=8080 npm run start:http
+MCP_PORT=8080 npm run start:http
+
+# Using .env file
+cp .env.example .env
+# Edit .env file with your settings
+npm run start:http
+```
+
 ### Usage Examples
 
 ```bash
@@ -273,6 +289,10 @@ npm start
 npm run start:http
 # Team members connect to: http://your-server:3000/message
 
+# Custom port
+PORT=8080 npm run start:http
+# Connect to: http://your-server:8080/message
+
 # Health monitoring in production
 curl http://your-server:3000/health
 
@@ -282,3 +302,90 @@ curl -X POST http://your-server:3000/message?sessionId=X \
 ```
 
 The server is optimized for the keyword-heavy search patterns common in LLM interactions and supports both local and remote deployment scenarios.
+
+## Production Deployment
+
+### Nginx Reverse Proxy
+
+The server works perfectly behind nginx. A complete configuration is provided in `nginx.conf`:
+
+```bash
+# Copy and customize the nginx config
+cp nginx.conf /etc/nginx/sites-available/mcp-server
+ln -s /etc/nginx/sites-available/mcp-server /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+# Run MCP server behind nginx
+PORT=3000 npm run start:http
+```
+
+**Key nginx features:**
+- ✅ SSE streaming support (`proxy_buffering off`)
+- ✅ WebSocket upgrade handling
+- ✅ CORS headers for browser access
+- ✅ SSL/HTTPS configuration ready
+- ✅ Health check endpoint proxying
+- ✅ Production security headers
+
+### Docker Deployment
+
+```bash
+# Build and run with Docker
+docker build -t mcp-server .
+docker run -p 3000:3000 mcp-server
+
+# Or use Docker Compose (includes nginx)
+docker-compose up -d
+
+# Custom port with Docker Compose
+MCP_PORT=8080 docker-compose up -d
+```
+
+**Docker features:**
+- ✅ Multi-stage build for optimal size
+- ✅ Non-root user for security
+- ✅ Health checks built-in
+- ✅ Volume mounting for documentation updates
+- ✅ nginx proxy container included
+
+### Environment Variables
+
+```bash
+PORT=3000          # Server port (default: 3000)
+MCP_PORT=3000      # Alternative port variable
+NODE_ENV=production # Environment mode
+HOST=0.0.0.0       # Host binding (default: all interfaces)
+```
+
+### SSL/HTTPS Setup
+
+For production with SSL:
+
+1. **Get SSL certificate** (Let's Encrypt recommended):
+   ```bash
+   certbot --nginx -d your-domain.com
+   ```
+
+2. **Update nginx config** with your domain in `nginx.conf`
+
+3. **Enable HTTPS** in the nginx SSL section
+
+4. **Start services**:
+   ```bash
+   # With nginx proxy
+   PORT=3000 npm run start:http
+   
+   # Or with Docker Compose
+   docker-compose up -d
+   ```
+
+### Production Checklist
+
+- [ ] Configure custom port if needed
+- [ ] Set up nginx reverse proxy
+- [ ] Enable SSL/HTTPS
+- [ ] Configure firewall (allow 80/443, block direct 3000)
+- [ ] Set up log rotation
+- [ ] Configure monitoring/alerts on `/health` endpoint
+- [ ] Test SSE connections work through proxy
+- [ ] Verify CORS headers for browser clients

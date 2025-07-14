@@ -531,7 +531,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           return;
         }
         
-        const parsedUrl = new URL(req.url || '', `http://localhost:${port}`);
+        const parsedUrl = new URL(req.url || '', `http://${req.headers.host || `localhost:${port}`}`);
         
         // Handle SSE connection (GET request to /message)
         if (req.method === 'GET' && parsedUrl.pathname === '/message') {
@@ -646,7 +646,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
 
 async function main() {
   const server = new DemoSDKHTTPMCPServer();
-  const port = parseInt(process.env.PORT || '3000');
+  const port = parseInt(process.env.PORT || process.env.MCP_PORT || '3000');
   
   process.on('SIGINT', () => {
     console.log('Shutting down HTTP server...');
