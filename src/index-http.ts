@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { randomUUID } from 'crypto';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -12,7 +13,7 @@ import { TypeDocParser } from './parser.js';
 import { DocumentSearcher, SearchOptions } from './search.js';
 import { ParsedPage, ParserConfig } from './types.js';
 
-// HTTP version of the MCP server using SSE transport
+// HTTP version of the MCP server using StreamableHTTP transport
 export class DemoSDKHTTPMCPServer {
   private server: Server;
   private parser!: TypeDocParser;
@@ -318,7 +319,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           type: 'text',
           text: JSON.stringify({
             query,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
             pagination: {
               limit,
               offset,
@@ -400,7 +401,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           type: 'text',
           text: JSON.stringify({
             query,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
             pagination: {
               page,
               pageSize,
@@ -446,7 +447,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
             content: page.content,
             codeBlocks: page.codeBlocks,
             metadata: page.metadata,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
           }, null, 2)
         }
       ]
@@ -463,7 +464,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           text: JSON.stringify({
             modules,
             count: modules.length,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
           }, null, 2)
         }
       ]
@@ -489,7 +490,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           type: 'text',
           text: JSON.stringify({
             ...page,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
           }, null, 2)
         }
       ]
@@ -505,7 +506,7 @@ The documentation is automatically updated from the TypeDoc generated files.`
           type: 'text',
           text: JSON.stringify({
             ...stats,
-            transport: 'HTTP/SSE',
+            transport: 'StreamableHTTP',
           }, null, 2)
         }
       ]
@@ -514,17 +515,34 @@ The documentation is automatically updated from the TypeDoc generated files.`
 
   async run(port: number = 3000): Promise<void> {
     const http = await import('http');
-    const url = await import('url');
     
-    // Store active transports by session ID
-    const activeTransports = new Map<string, SSEServerTransport>();
+    // Session management for StreamableHTTP
+    const activeSessions = new Map<string, boolean>();
+    
+    // Create StreamableHTTP transport with session management
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sessionId: string) => {
+        activeSessions.set(sessionId, true);
+        console.log(`✅ Session initialized: ${sessionId}`);
+      },
+      onsessionclosed: (sessionId: string) => {
+        activeSessions.delete(sessionId);
+        console.log(`🧹 Session closed: ${sessionId}`);
+      },
+      allowedOrigins: ['*'],
+      enableDnsRebindingProtection: false,
+    });
+    
+    // Connect the server to the transport
+    await this.server.connect(transport);
     
     const httpServer = http.createServer(async (req, res) => {
       try {
         // Enable CORS
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Id');
         
         if (req.method === 'OPTIONS') {
           res.writeHead(200);
@@ -534,79 +552,42 @@ The documentation is automatically updated from the TypeDoc generated files.`
         
         const parsedUrl = new URL(req.url || '', `http://${req.headers.host || `localhost:${port}`}`);
         
-        // Handle SSE connection (GET request to /message)
-        if (req.method === 'GET' && parsedUrl.pathname === '/message') {
-          console.log('🔌 New SSE connection');
-          
-          // Create SSE transport
-          const transport = new SSEServerTransport('/message', res);
-          activeTransports.set(transport.sessionId, transport);
-          
-          // Set up cleanup when connection closes
-          transport.onclose = () => {
-            activeTransports.delete(transport.sessionId);
-            console.log(`🧹 Cleaned up session ${transport.sessionId}`);
-          };
-          
-          // Connect the server to this transport (this calls start() automatically)
-          await this.server.connect(transport);
-          
-          console.log(`✅ SSE connection established with session ${transport.sessionId}`);
-          return;
-        }
-        
-        // Handle POST messages to /message
-        if (req.method === 'POST' && parsedUrl.pathname === '/message') {
-          const sessionId = parsedUrl.searchParams.get('sessionId');
-          
-          if (!sessionId) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing sessionId parameter' }));
-            return;
-          }
-          
-          const transport = activeTransports.get(sessionId);
-          
-          if (!transport) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Session not found' }));
-            return;
-          }
-          
-          // Handle the POST message through the transport
-          await transport.handlePostMessage(req, res);
-          return;
-        }
-        
-        // Health check endpoint
+        // Handle health check endpoint
         if (req.method === 'GET' && parsedUrl.pathname === '/health') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             status: 'healthy',
             initialized: this.isInitialized,
             pages: this.searcher?.getStats().totalPages || 0,
-            activeSessions: activeTransports.size,
-            transport: 'SSE'
+            activeSessions: activeSessions.size,
+            transport: 'StreamableHTTP'
           }));
           return;
         }
         
-        // Server info endpoint
+        // Handle server info endpoint
         if (req.method === 'GET' && parsedUrl.pathname === '/') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             name: 'DemoSDK API Reference MCP Server',
             version: '1.0.0',
-            transport: 'SSE',
+            transport: 'StreamableHTTP',
             endpoints: {
-              'GET /message': 'Establish SSE connection',
-              'POST /message?sessionId=X': 'Send MCP message',
+              'GET /message': 'Start MCP session',
+              'POST /message': 'Send MCP message',
+              'DELETE /message': 'Close MCP session',
               'GET /health': 'Health check',
               'GET /': 'Server info'
             },
-            activeSessions: activeTransports.size,
+            activeSessions: activeSessions.size,
             usage: 'Connect MCP-compatible clients to /message endpoint'
           }));
+          return;
+        }
+        
+        // All MCP communication goes through /message with StreamableHTTP
+        if (parsedUrl.pathname === '/message') {
+          await transport.handleRequest(req, res);
           return;
         }
         
@@ -628,16 +609,14 @@ The documentation is automatically updated from the TypeDoc generated files.`
     
     // Handle server shutdown gracefully
     process.on('SIGINT', () => {
-      console.log('📴 Shutting down SSE server...');
-      for (const [sessionId, transport] of activeTransports.entries()) {
-        transport.close();
-      }
+      console.log('📴 Shutting down StreamableHTTP server...');
+      transport.close();
       httpServer.close();
     });
     
     httpServer.listen(port, () => {
       console.log(`🚀 DemoSDK MCP Server running on http://localhost:${port}`);
-      console.log(`📡 SSE endpoint: http://localhost:${port}/message`);
+      console.log(`📡 StreamableHTTP endpoint: http://localhost:${port}/message`);
       console.log(`🏥 Health check: http://localhost:${port}/health`);
       console.log(`📋 Server info: http://localhost:${port}/`);
       console.log(`🔌 Ready for MCP client connections`);
@@ -650,19 +629,19 @@ async function main() {
   const port = parseInt(process.env.MCP_PORT || process.env.PORT || '3000');
   
   process.on('SIGINT', () => {
-    console.log('Shutting down HTTP server...');
+    console.log('Shutting down StreamableHTTP server...');
     process.exit(0);
   });
 
   process.on('SIGTERM', () => {
-    console.log('Shutting down HTTP server...');
+    console.log('Shutting down StreamableHTTP server...');
     process.exit(0);
   });
 
   try {
     await server.run(port);
   } catch (error) {
-    console.error('Failed to start HTTP server:', error);
+    console.error('Failed to start StreamableHTTP server:', error);
     process.exit(1);
   }
 }

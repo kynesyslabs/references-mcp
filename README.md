@@ -315,7 +315,7 @@ ln -s /etc/nginx/sites-available/mcp-server /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 
 # Run MCP server behind nginx
-PORT=3000 npm run start:http
+MCP_PORT=3000 npm run start:http
 ```
 
 **Key nginx features:**
@@ -345,7 +345,7 @@ MCP_PORT=8080 docker-compose up -d
 - ✅ Non-root user for security
 - ✅ Health checks built-in
 - ✅ Volume mounting for documentation updates
-- ✅ nginx proxy container included
+- ✅ Environment variable configuration
 
 ### Environment Variables
 
@@ -371,7 +371,7 @@ For production with SSL:
 4. **Start services**:
    ```bash
    # With nginx proxy
-   PORT=3000 npm run start:http
+   MCP_PORT=3000 npm run start:http
    
    # Or with Docker Compose
    docker-compose up -d
