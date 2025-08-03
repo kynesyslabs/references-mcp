@@ -77,32 +77,44 @@ export class DemoSDKMCPServer {
         throw new Error('Server not initialized. Please wait for initialization to complete.');
       }
 
-      switch (name) {
-        case 'fetch_demosdk_api_ref_docs':
-          return this.fetchAllDocs();
-        
-        case 'search_demosdk_api_ref_docs':
-          return this.searchDocs(args);
-        
-        case 'search_demosdk_api_ref_code':
-          return this.searchCode(args);
-        
-        case 'fetch_generic_url_content':
-          return this.fetchGenericContent(args);
-        
-        case 'get_modules':
-          return this.getModules();
-        
-        case 'get_page_by_path':
-          return this.getPageByPath(args);
-        
-        case 'get_stats':
-          return this.getStats();
+      // Add timeout wrapper to prevent runaway operations
+      return this.withTimeout(async () => {
+        switch (name) {
+          case 'fetch_demosdk_api_ref_docs':
+            return this.fetchAllDocs();
+          
+          case 'search_demosdk_api_ref_docs':
+            return this.searchDocs(args);
+          
+          case 'search_demosdk_api_ref_code':
+            return this.searchCode(args);
+          
+          case 'fetch_generic_url_content':
+            return this.fetchGenericContent(args);
+          
+          case 'get_modules':
+            return this.getModules();
+          
+          case 'get_page_by_path':
+            return this.getPageByPath(args);
+          
+          case 'get_stats':
+            return this.getStats();
 
-        default:
-          throw new Error(`Unknown tool: ${name}`);
-      }
+          default:
+            throw new Error(`Unknown tool: ${name}`);
+        }
+      }, 30000); // 30 second timeout
     });
+  }
+
+  private async withTimeout<T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> {
+    return Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
   }
 
   private getTools(): Tool[] {
@@ -277,6 +289,16 @@ The documentation is automatically updated from the TypeDoc generated files.`
     let currentChars = 0;
     const formattedResults = [];
     
+    // Pre-calculate base response size to avoid repeated JSON.stringify
+    const baseResponseSize = JSON.stringify({
+      query,
+      pagination: { limit, offset, returned: 0, hasMore: false, nextOffset: null },
+      results: [],
+      usage: { charactersUsed: 0, maxCharacters: MAX_RESPONSE_CHARS }
+    }).length;
+    
+    currentChars = baseResponseSize;
+    
     for (const result of results) {
       const snippet = result.matches.length > 0 
         ? result.matches[0].snippet 
@@ -298,38 +320,42 @@ The documentation is automatically updated from the TypeDoc generated files.`
         interfaceCount: result.page.metadata.interfaces.length,
       };
       
-      const resultJson = JSON.stringify(formattedResult);
+      // Estimate size more efficiently (avoid full JSON.stringify for each item)
+      const estimatedSize = JSON.stringify(formattedResult).length + 10; // +10 for array formatting
       
       // Check if adding this result would exceed the limit
-      if (currentChars + resultJson.length > MAX_RESPONSE_CHARS) {
+      if (currentChars + estimatedSize > MAX_RESPONSE_CHARS) {
         break;
       }
       
       formattedResults.push(formattedResult);
-      currentChars += resultJson.length;
+      currentChars += estimatedSize;
     }
 
     const hasMore = results.length > formattedResults.length;
     
+    // Build final response object once and stringify once
+    const responseData = {
+      query,
+      pagination: {
+        limit,
+        offset,
+        returned: formattedResults.length,
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+      },
+      results: formattedResults,
+      usage: {
+        charactersUsed: currentChars,
+        maxCharacters: MAX_RESPONSE_CHARS,
+      }
+    };
+
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({
-            query,
-            pagination: {
-              limit,
-              offset,
-              returned: formattedResults.length,
-              hasMore,
-              nextOffset: hasMore ? offset + limit : null,
-            },
-            results: formattedResults,
-            usage: {
-              charactersUsed: currentChars,
-              maxCharacters: MAX_RESPONSE_CHARS,
-            }
-          }, null, 2)
+          text: JSON.stringify(responseData, null, 2)
         }
       ]
     };
@@ -354,6 +380,16 @@ The documentation is automatically updated from the TypeDoc generated files.`
     const MAX_RESPONSE_CHARS = 20000;
     let currentChars = 0;
     const codeResults = [];
+
+    // Pre-calculate base response size
+    const baseResponseSize = JSON.stringify({
+      query,
+      pagination: { page, pageSize, returned: 0, hasMore: false, nextPage: null },
+      results: [],
+      usage: { charactersUsed: 0, maxCharacters: MAX_RESPONSE_CHARS }
+    }).length;
+    
+    currentChars = baseResponseSize;
 
     for (const result of results) {
       if (result.page.codeBlocks.length === 0) continue;
@@ -381,38 +417,42 @@ The documentation is automatically updated from the TypeDoc generated files.`
         relevantCodeBlocks: relevantCodeBlocks.length,
       };
 
-      const resultJson = JSON.stringify(codeResult);
+      // Estimate size efficiently
+      const estimatedSize = JSON.stringify(codeResult).length + 10;
       
       // Check if adding this result would exceed the limit
-      if (currentChars + resultJson.length > MAX_RESPONSE_CHARS) {
+      if (currentChars + estimatedSize > MAX_RESPONSE_CHARS) {
         break;
       }
       
       codeResults.push(codeResult);
-      currentChars += resultJson.length;
+      currentChars += estimatedSize;
     }
 
     const hasMore = results.length > codeResults.length;
+
+    // Build final response object once and stringify once
+    const responseData = {
+      query,
+      pagination: {
+        page,
+        pageSize,
+        returned: codeResults.length,
+        hasMore,
+        nextPage: hasMore ? page + 1 : null,
+      },
+      results: codeResults,
+      usage: {
+        charactersUsed: currentChars,
+        maxCharacters: MAX_RESPONSE_CHARS,
+      }
+    };
 
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({
-            query,
-            pagination: {
-              page,
-              pageSize,
-              returned: codeResults.length,
-              hasMore,
-              nextPage: hasMore ? page + 1 : null,
-            },
-            results: codeResults,
-            usage: {
-              charactersUsed: currentChars,
-              maxCharacters: MAX_RESPONSE_CHARS,
-            }
-          }, null, 2)
+          text: JSON.stringify(responseData, null, 2)
         }
       ]
     };

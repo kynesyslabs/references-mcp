@@ -189,19 +189,30 @@ export class DocumentSearcher {
     const sortedResults = Array.from(scores.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(offset, offset + limit)
-      .map(([pageIndex, score]) => ({
-        page: includeContent ? this.pages[pageIndex] : this.stripContent(this.pages[pageIndex]),
-        score,
-        matches: matches.get(pageIndex) || []
-      }));
+      .map(([pageIndex, score]) => {
+        const page = this.pages[pageIndex];
+        return {
+          page: includeContent ? page : this.stripContent(page),
+          score,
+          matches: matches.get(pageIndex) || []
+        };
+      });
 
     return sortedResults;
   }
 
   private findFuzzyMatches(token: string): Set<number> {
     const matches = new Set<number>();
+    let checkedCount = 0;
+    const maxChecks = 1000; // Limit fuzzy search scope to prevent timeouts
     
     for (const [indexToken, pageIndexes] of this.index.entries()) {
+      // Early termination to prevent O(n²) complexity
+      if (checkedCount++ > maxChecks) break;
+      
+      // Skip if token length difference is too large (quick filter)
+      if (Math.abs(token.length - indexToken.length) > 2) continue;
+      
       if (this.fuzzyMatch(token, indexToken)) {
         pageIndexes.forEach(pageIndex => matches.add(pageIndex));
       }
@@ -211,6 +222,12 @@ export class DocumentSearcher {
   }
 
   private fuzzyMatch(token1: string, token2: string): boolean {
+    // Quick exact match check
+    if (token1 === token2) return true;
+    
+    // Skip very short tokens to avoid noise
+    if (token1.length < 3 || token2.length < 3) return false;
+    
     const maxDistance = Math.max(1, Math.floor(token1.length / 3));
     return this.levenshteinDistance(token1, token2) <= maxDistance;
   }
@@ -367,7 +384,22 @@ export class DocumentSearcher {
   private stripContent(page: ParsedPage): ParsedPage {
     return {
       ...page,
-      content: page.content.slice(0, 200) + '...'
+      content: page.content.slice(0, 200) + '...',
+      // Also strip large code blocks and metadata for memory efficiency
+      codeBlocks: page.codeBlocks.map(block => ({
+        ...block,
+        code: block.code.length > 500 ? block.code.slice(0, 500) + '...' : block.code
+      })),
+      metadata: {
+        ...page.metadata,
+        // Keep essential metadata but truncate large arrays
+        functions: page.metadata.functions.slice(0, 10),
+        classes: page.metadata.classes.slice(0, 10),
+        interfaces: page.metadata.interfaces.slice(0, 10),
+        types: page.metadata.types.slice(0, 10),
+        exports: page.metadata.exports.slice(0, 10),
+        headings: page.metadata.headings.slice(0, 20)
+      }
     };
   }
 
