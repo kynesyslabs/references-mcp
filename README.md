@@ -41,7 +41,32 @@ npm run start:http
 npm start
 ```
 
-### 3. Connect via MCP Client
+### 3. Docker (Recommended)
+
+For production use with automatic restarts and log management:
+
+```bash
+# Build and start
+npm run docker:up
+
+# View logs
+npm run docker:logs
+
+# Stop
+npm run docker:down
+
+# Restart
+npm run docker:restart
+```
+
+The Docker setup includes:
+- ✅ Auto-updates documentation on startup
+- ✅ Periodic updates every 6 hours via cron
+- ✅ Health checks and auto-restart
+- ✅ Persistent data volumes
+- ✅ Log file mounting
+
+### 4. Connect via MCP Client
 
 The server provides these tools:
 

@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  demosdk-docs-mcp:
+    build: .
+    container_name: demosdk-docs-mcp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      # Persist the cloned repository
+      - docs-repo:/app/docs-repo
+      # Persist the cache
+      - cache-data:/app/.cache
+      # Mount logs for easy access
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - mcp-network
+
+volumes:
+  docs-repo:
+  cache-data:
+
+networks:
+  mcp-network:
+    driver: bridge
