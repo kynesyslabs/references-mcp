@@ -57,27 +57,57 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: 'search_docs',
         description: 'Search Demos SDK documentation with pagination support',
-        inputSchema: SearchDocsSchema,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query for documentation' },
+            limit: { type: 'number', description: 'Maximum results to return', default: 10 },
+            offset: { type: 'number', description: 'Pagination offset', default: 0 },
+          },
+          required: ['query'],
+        },
       },
       {
         name: 'get_page',
         description: 'Get a specific documentation page by path',
-        inputSchema: GetPageSchema,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Documentation page path' },
+            section: { type: 'string', description: 'Specific section within the page' },
+          },
+          required: ['path'],
+        },
       },
       {
         name: 'list_modules',
         description: 'List all available modules in the documentation',
-        inputSchema: ListModulesSchema,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Maximum modules to return', default: 50 },
+            offset: { type: 'number', description: 'Pagination offset', default: 0 },
+          },
+          required: [],
+        },
       },
       {
         name: 'get_stats',
         description: 'Get documentation statistics and cache info',
-        inputSchema: z.object({}),
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
       },
       {
         name: 'update_docs',
         description: 'Update documentation from the Git repository',
-        inputSchema: z.object({}),
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
       },
     ],
   };
@@ -217,11 +247,18 @@ if (transportType === 'http') {
     }
   });
   
-  // Connect the MCP server first
-  await server.connect(transport);
-  
-  httpServer.listen(3000, () => {
-    console.error('MCP Server with health check listening on port 3000');
+  // Add cleanup for SSE connections when the process exits
+  process.on('SIGINT', async () => {
+    console.error('Gracefully shutting down...');
+    await transport.close();
+    process.exit(0);
+  });
+
+  httpServer.listen(3000, async () => {
+    console.error('HTTP Server listening on port 3000');
+    // Connect the MCP server after HTTP server is listening
+    await server.connect(transport);
+    console.error('MCP Server connected and ready');
   });
   
   console.error(`Demos SDK Documentation MCP Server running on StreamableHTTP...`);
