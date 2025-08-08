@@ -191,32 +191,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const args = process.argv.slice(2);
 const transportType = args.includes('--http') ? 'http' : 'stdio';
 
-let transport;
+let transport: StdioServerTransport | StreamableHTTPServerTransport;
 
 if (transportType === 'http') {
-  // Add simple health check endpoint before starting MCP server
   const http = await import('http');
-  const healthServer = http.createServer((req, res) => {
+  
+  transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // Stateless mode for LLM clients
+    enableJsonResponse: true // Enable direct JSON responses instead of SSE
+  });
+
+  // Create HTTP server that integrates both health check and MCP transport
+  const httpServer = http.createServer(async (req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
     } else {
-      res.writeHead(404);
-      res.end('Not Found');
+      // Handle MCP requests at root and other paths
+      try {
+        await (transport as StreamableHTTPServerTransport).handleRequest(req, res);
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
     }
   });
   
-  healthServer.listen(3000, () => {
-    console.error('Health check server listening on port 3000');
+  // Connect the MCP server first
+  await server.connect(transport);
+  
+  httpServer.listen(3000, () => {
+    console.error('MCP Server with health check listening on port 3000');
   });
-
-  transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => Math.random().toString(36).substring(7)
-  });
+  
   console.error(`Demos SDK Documentation MCP Server running on StreamableHTTP...`);
 } else {
   transport = new StdioServerTransport();
   console.error('Demos SDK Documentation MCP Server running on stdio...');
+  await server.connect(transport);
 }
-
-await server.connect(transport);
