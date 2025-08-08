@@ -9,6 +9,7 @@ import {
 import { z } from 'zod';
 import { GitDocumentationService } from './services/git-docs.js';
 import { TokenCounter } from './services/token-counter.js';
+import { UpdateScheduler } from './services/scheduler.js';
 
 const server = new Server(
   {
@@ -24,6 +25,7 @@ const server = new Server(
 
 const docService = new GitDocumentationService();
 const tokenCounter = new TokenCounter();
+const scheduler = new UpdateScheduler(docService);
 
 // Tool schemas
 const SearchDocsSchema = z.object({
@@ -44,6 +46,9 @@ const ListModulesSchema = z.object({
 
 // Initialize documentation cache on startup
 await docService.initialize();
+
+// Start periodic update scheduler
+scheduler.start();
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {

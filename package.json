@@ -13,7 +13,7 @@
     "clone-docs": "tsx ./src/scripts/clone-docs.ts",
     "update-docs": "tsx ./src/scripts/update-docs.ts",
     "docker:build": "docker-compose build",
-    "docker:up": "docker-compose up -d",
+    "docker:up": "docker-compose up -d --build",
     "docker:down": "docker-compose down",
     "docker:logs": "docker-compose logs -f",
     "docker:restart": "docker-compose restart"

@@ -46,7 +46,7 @@ npm start
 For production use with automatic restarts and log management:
 
 ```bash
-# Build and start
+# Build and start (rebuilds image if needed)
 npm run docker:up
 
 # View logs
@@ -57,6 +57,9 @@ npm run docker:down
 
 # Restart
 npm run docker:restart
+
+# Force rebuild (if you made code changes)
+npm run docker:build
 ```
 
 The Docker setup includes:

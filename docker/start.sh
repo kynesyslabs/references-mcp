@@ -6,9 +6,7 @@ echo "🚀 Starting Demos SDK Documentation MCP Server..."
 echo "📥 Cloning/updating documentation..."
 npm run clone-docs
 
-# Start cron daemon in background for periodic updates
-echo "⏰ Starting cron for periodic updates..."
-crond -b
+# Note: Periodic updates are now handled by the Node.js scheduler in the MCP server
 
 # Start the MCP server
 echo "🌐 Starting MCP server..."

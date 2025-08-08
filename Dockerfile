@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
-# Install git for repository cloning, cron for periodic updates, and curl for health checks
-RUN apk add --no-cache git dcron curl
+# Install git for repository cloning and curl for health checks
+RUN apk add --no-cache git curl
 
 WORKDIR /app
 
@@ -22,8 +22,7 @@ RUN mkdir -p /app/logs /app/.cache /app/docs-repo
 COPY docker/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
-# Create cron job for periodic updates (every 6 hours)
-RUN echo "0 */6 * * * cd /app && npm run update-docs >> /app/logs/cron.log 2>&1" > /etc/crontabs/root
+# Note: Periodic updates are now handled by Node.js scheduler, no cron needed
 
 # Expose port
 EXPOSE 3000
