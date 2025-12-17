@@ -32,6 +32,11 @@ const SearchDocsSchema = z.object({
   query: z.string().describe('Search query for documentation'),
   limit: z.number().optional().default(10).describe('Maximum results to return'),
   offset: z.number().optional().default(0).describe('Pagination offset'),
+  module: z.string().optional().describe('Filter by module name (case-insensitive match)'),
+  type: z
+    .enum(['class','interface','module','function','enum','type','variable','index','other'])
+    .optional()
+    .describe('Filter by page type'),
 });
 
 const GetPageSchema = z.object({
@@ -63,6 +68,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             query: { type: 'string', description: 'Search query for documentation' },
             limit: { type: 'number', description: 'Maximum results to return', default: 10 },
             offset: { type: 'number', description: 'Pagination offset', default: 0 },
+            module: { type: 'string', description: 'Filter by module name (case-insensitive)' },
+            type: { 
+              type: 'string', 
+              description: 'Filter by page type (class, interface, module, function, enum, type, variable, index, other)' 
+            },
           },
           required: ['query'],
         },
@@ -124,6 +134,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = await docService.search(parsed.query, {
           limit: parsed.limit,
           offset: parsed.offset,
+          module: parsed.module,
+          type: parsed.type,
         });
         
         // Ensure response stays under token limit

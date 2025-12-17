@@ -11,6 +11,13 @@ const CACHE_FILE = path.join(CACHE_DIR, 'docs.json');
 const META_FILE = path.join(CACHE_DIR, 'meta.json');
 const REPO_URL = 'https://github.com/kynesyslabs/demosdk-api-ref.git';
 
+// Lightweight stopword list to reduce noise in search scoring
+const STOPWORDS = new Set([
+  'a','an','and','are','as','at','be','but','by','for','if','in','into','is','it','no','not',
+  'of','on','or','such','that','the','their','then','there','these','they','this','to','was',
+  'will','with','we','you','your','from','about','what','when','where','which'
+]);
+
 interface DocPage {
   path: string;
   title: string;
@@ -46,6 +53,9 @@ interface CacheMeta {
 export class GitDocumentationService {
   private cache: Map<string, DocPage> = new Map();
   private searchIndex: Map<string, Set<string>> = new Map();
+  private termFreqs: Map<string, Map<string, number>> = new Map();
+  private docFreq: Map<string, number> = new Map();
+  private totalDocs = 0;
   private initialized = false;
   private meta: CacheMeta = { lastCommit: '', lastUpdate: '', totalPages: 0 };
 
@@ -305,16 +315,30 @@ export class GitDocumentationService {
 
   private buildSearchIndex(): void {
     this.searchIndex.clear();
+    this.termFreqs.clear();
+    this.docFreq.clear();
+    this.totalDocs = this.cache.size;
     
     for (const [path, page] of this.cache) {
       const words = this.tokenize(page.title + ' ' + page.content);
+      const termCount = new Map<string, number>();
+      const unique = new Set<string>();
       
       for (const word of words) {
+        termCount.set(word, (termCount.get(word) || 0) + 1);
+        unique.add(word);
+      }
+
+      // Inverted index
+      for (const word of unique) {
         if (!this.searchIndex.has(word)) {
           this.searchIndex.set(word, new Set());
         }
         this.searchIndex.get(word)!.add(path);
+        this.docFreq.set(word, (this.docFreq.get(word) || 0) + 1);
       }
+
+      this.termFreqs.set(path, termCount);
     }
   }
 
@@ -324,43 +348,78 @@ export class GitDocumentationService {
         .toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ')
         .split(/\s+/)
-        .filter(word => word.length > 1)
+        .filter(word => word.length > 1 && !STOPWORDS.has(word))
     );
   }
 
   async search(
     query: string,
-    options: { limit?: number; offset?: number } = {}
+    options: { limit?: number; offset?: number; module?: string; type?: string } = {}
   ): Promise<{
     results: SearchResult[];
     total: number;
     offset: number;
     hasMore: boolean;
   }> {
-    const { limit = 10, offset = 0 } = options;
-    const queryWords = this.tokenize(query);
+    const { limit = 10, offset = 0, module, type } = options;
+    const moduleFilter = module?.toLowerCase();
+    const typeFilter = type?.toLowerCase();
+    const queryWords = Array.from(this.tokenize(query));
     const scores = new Map<string, number>();
 
-    // Calculate relevance scores
+    // Early exit if nothing to search
+    if (queryWords.length === 0) {
+      return { results: [], total: 0, offset, hasMore: false };
+    }
+
+    // Calculate relevance scores with TF-IDF and field boosts
     for (const word of queryWords) {
       const paths = this.searchIndex.get(word);
-      if (paths) {
-        for (const path of paths) {
-          scores.set(path, (scores.get(path) || 0) + 1);
-        }
+      if (!paths) continue;
+
+      const df = this.docFreq.get(word) || 1;
+      const idf = Math.log((this.totalDocs + 1) / df) + 1;
+
+      for (const path of paths) {
+        const page = this.cache.get(path);
+        if (!page) continue;
+        if (moduleFilter && page.module?.toLowerCase() !== moduleFilter) continue;
+        if (typeFilter && page.type.toLowerCase() !== typeFilter) continue;
+
+        const termCount = this.termFreqs.get(path)?.get(word) || 0;
+        const tf = termCount; // term frequency in document
+        let score = (scores.get(path) || 0) + tf * idf;
+
+        // Boost if the word appears in title or module
+        const titleTokens = this.tokenize(page.title);
+        if (titleTokens.has(word)) score += idf * 2;
+        if (page.module && page.module.toLowerCase().includes(word)) score += idf;
+
+        scores.set(path, score);
       }
     }
 
+    // Phrase/title boosts
+    const lowerQuery = query.toLowerCase();
+    for (const [path, baseScore] of scores.entries()) {
+      const page = this.cache.get(path);
+      if (!page) continue;
+
+      let score = baseScore;
+      if (page.title.toLowerCase().includes(lowerQuery)) score += 5;
+      if (page.content.toLowerCase().includes(lowerQuery)) score += 2;
+      scores.set(path, score);
+    }
+
     // Sort by score and create results
-    const sortedPaths = Array.from(scores.entries())
-      .sort((a, b) => b[1] - a[1]);
+    const sortedPaths = Array.from(scores.entries()).sort((a, b) => b[1] - a[1]);
 
     const total = sortedPaths.length;
     const paginatedPaths = sortedPaths.slice(offset, offset + limit);
 
     const results: SearchResult[] = paginatedPaths.map(([path, score]) => {
       const page = this.cache.get(path)!;
-      const snippet = this.extractSnippet(page.content, query);
+      const snippet = this.extractSnippet(page.content, queryWords);
       
       return {
         path,
@@ -380,21 +439,40 @@ export class GitDocumentationService {
     };
   }
 
-  private extractSnippet(content: string, query: string): string {
+  private extractSnippet(content: string, queryWords: string[]): string {
     const lowerContent = content.toLowerCase();
-    const lowerQuery = query.toLowerCase();
-    const index = lowerContent.indexOf(lowerQuery);
-    
-    if (index === -1) {
-      return content.substring(0, 200) + '...';
+    let bestIndex = -1;
+
+    // Prefer exact phrase match if possible
+    const phrase = queryWords.join(' ');
+    if (phrase.length > 0) {
+      bestIndex = lowerContent.indexOf(phrase);
     }
 
-    const start = Math.max(0, index - 100);
-    const end = Math.min(content.length, index + query.length + 100);
-    
-    return (start > 0 ? '...' : '') + 
-           content.substring(start, end) + 
-           (end < content.length ? '...' : '');
+    // Otherwise pick first matching token
+    if (bestIndex === -1) {
+      for (const word of queryWords) {
+        const idx = lowerContent.indexOf(word);
+        if (idx !== -1) {
+          bestIndex = idx;
+          break;
+        }
+      }
+    }
+
+    // Fallback to start of content
+    if (bestIndex === -1) {
+      return content.substring(0, 220) + (content.length > 220 ? '...' : '');
+    }
+
+    const window = 200;
+    const start = Math.max(0, bestIndex - window / 2);
+    const end = Math.min(content.length, start + window);
+
+    const snippet = content.substring(start, end).trim();
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < content.length ? '...' : '';
+    return `${prefix}${snippet}${suffix}`;
   }
 
   async getPage(pagePath: string, section?: string): Promise<DocPage | null> {
